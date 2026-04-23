@@ -249,12 +249,19 @@ def load_raw():
         if os.path.exists(p):
             try:
                 df = pd.read_csv(p, low_memory=False)
-                if "price" in df.columns and df["price"].dtype == object:
-                    df["price_clean"] = pd.to_numeric(
-                        df["price"].astype(str).str.replace("£","").str.replace("$","")
-                        .str.replace(",","").str.strip(), errors="coerce")
+                price_col = next((c for c in ["price","price_clean","nightly_price"]
+                                  if c in df.columns), None)
+                if price_col:
+                    raw_price = df[price_col]
+                    if raw_price.dtype == object:
+                        import re as _re
+                        cleaned = raw_price.astype(str).str.replace(
+                            r'[£$€,\s\"\']', '', regex=True).str.strip()
+                        df["price_clean"] = pd.to_numeric(cleaned, errors="coerce")
+                    else:
+                        df["price_clean"] = pd.to_numeric(raw_price, errors="coerce")
                 else:
-                    df["price_clean"] = pd.to_numeric(df.get("price"), errors="coerce")
+                    df["price_clean"] = np.nan
                 return df.dropna(subset=["latitude","longitude"])
             except Exception: pass
     return None
@@ -734,16 +741,26 @@ def results_section(ui, pred, X, model, feat_cols, defaults, df_proc, df_raw):
 
     # ── Responsible use ───────────────────────────────────────────────────────
     with st.expander("⚖️ Using this tool responsibly", expanded=False):
-        st.markdown("""
-This tool is based on 6,562 Airbnb listings in Manchester from September 2025. It's designed to give a sense of how different features relate to price, not to set your price for you.
+        st.markdown(
+            """This tool is based on 6,562 Airbnb listings in Manchester from September 2025. """
+            """It's designed to give a sense of how different features relate to price, not to set your price for you.
 
-**A few things to keep in mind:**
+"""
+            """**A few things to keep in mind:**
 
-- **Treat predictions as a guide, not a rule.** The model explains about half of the variation in prices (R² ≈ 0.50). Things like seasonality, events, and your own hosting style aren't captured.
-- **Use it carefully when setting prices.** Tools like this can push prices up if followed too closely. It's worth thinking about what feels fair, not just what the model suggests.
-- **Be aware of where it works better or worse.** The model was checked across room types, price ranges, and areas, and didn't show clear unfair bias. That said, it's less accurate for very low and very high priced listings.
-- **Your judgement still matters most.** This works best alongside your own knowledge of your property, your guests, and the local area.
-""")
+"""
+            """- **Treat predictions as a guide, not a rule.** The model explains about half of the variation in prices """
+            """(R² ≈ 0.50). Things like seasonality, events, and your own hosting style are not captured.
+"""
+            """- **Use it carefully when setting prices.** Tools like this can push prices up if followed too closely. """
+            """It's worth thinking about what feels fair, not just what the model suggests.
+"""
+            """- **Be aware of where it works better or worse.** The model was checked across room types, price ranges, """
+            """and areas, and didn't show clear unfair bias. That said, it's less accurate for very low and very high priced listings.
+"""
+            """- **Your judgement still matters most.** This works best alongside your own knowledge of your property, """
+            """your guests, and the local area."""
+        )
 
     # ── Revenue estimates ─────────────────────────────────────────────────────
     st.markdown('<div class="sec-hdr">Revenue Estimates</div>', unsafe_allow_html=True)
@@ -1237,17 +1254,23 @@ def main():
                 sel = (f1.multiselect("Filter by area",
                        sorted(src[nc].dropna().unique()), default=sorted(src[nc].dropna().unique()))
                        if nc else [])
-                if pc:
-                    prices=src[pc].dropna()
-                    q01, q99 = prices.quantile(0.01), prices.quantile(0.99)
+                # Determine whether price filtering is possible
+                prices_valid = src[pc].dropna() if pc else pd.Series(dtype=float)
+                has_prices = len(prices_valid) > 0
+                if has_prices:
+                    q01 = prices_valid.quantile(0.01)
+                    q99 = prices_valid.quantile(0.99)
                     mn = int(q01) if pd.notna(q01) else 0
                     mx = int(q99) if pd.notna(q99) else 500
                     if mn >= mx: mn, mx = 0, 500
-                    pr=f2.slider("Price (£/night)",mn,mx,(mn,mx),step=5)
-                else: pr=(0,9999)
-                mdf=src.copy()
-                if nc and sel: mdf=mdf[mdf[nc].isin(sel)]
-                if pc: mdf=mdf[(mdf[pc]>=pr[0])&(mdf[pc]<=pr[1])].dropna(subset=[pc])
+                    pr = f2.slider("Price (£/night)", mn, mx, (mn, mx), step=5)
+                else:
+                    pr = (0, 9999)
+                    if pc: f2.caption("Price filter unavailable (price data not readable in this file)")
+                mdf = src.copy()
+                if nc and sel: mdf = mdf[mdf[nc].isin(sel)]
+                if pc and has_prices:
+                    mdf = mdf[(mdf[pc] >= pr[0]) & (mdf[pc] <= pr[1])].dropna(subset=[pc])
                 f3.metric("Listings",f"{len(mdf):,} of {len(src):,}")
 
                 mt1,mt2=st.tabs(["Map View","List View"])
