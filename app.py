@@ -732,6 +732,19 @@ def results_section(ui, pred, X, model, feat_cols, defaults, df_proc, df_raw):
         f'Model R² = 0.5015, RMSE = £84.73</div>'
         f'</div>', unsafe_allow_html=True)
 
+    # ── Responsible use ───────────────────────────────────────────────────────
+    with st.expander("⚖️ Using this tool responsibly", expanded=False):
+        st.markdown("""
+This tool is based on 6,562 Airbnb listings in Manchester from September 2025. It's designed to give a sense of how different features relate to price, not to set your price for you.
+
+**A few things to keep in mind:**
+
+- **Treat predictions as a guide, not a rule.** The model explains about half of the variation in prices (R² ≈ 0.50). Things like seasonality, events, and your own hosting style aren't captured.
+- **Use it carefully when setting prices.** Tools like this can push prices up if followed too closely. It's worth thinking about what feels fair, not just what the model suggests.
+- **Be aware of where it works better or worse.** The model was checked across room types, price ranges, and areas, and didn't show clear unfair bias. That said, it's less accurate for very low and very high priced listings.
+- **Your judgement still matters most.** This works best alongside your own knowledge of your property, your guests, and the local area.
+""")
+
     # ── Revenue estimates ─────────────────────────────────────────────────────
     st.markdown('<div class="sec-hdr">Revenue Estimates</div>', unsafe_allow_html=True)
     rc1,rc2,rc3,rc4 = st.columns(4)
@@ -1225,7 +1238,11 @@ def main():
                        sorted(src[nc].dropna().unique()), default=sorted(src[nc].dropna().unique()))
                        if nc else [])
                 if pc:
-                    prices=src[pc].dropna(); mn,mx=int(prices.quantile(0.01)),int(prices.quantile(0.99))
+                    prices=src[pc].dropna()
+                    q01, q99 = prices.quantile(0.01), prices.quantile(0.99)
+                    mn = int(q01) if pd.notna(q01) else 0
+                    mx = int(q99) if pd.notna(q99) else 500
+                    if mn >= mx: mn, mx = 0, 500
                     pr=f2.slider("Price (£/night)",mn,mx,(mn,mx),step=5)
                 else: pr=(0,9999)
                 mdf=src.copy()
@@ -1605,7 +1622,7 @@ def main():
                 ],
             })
             st.dataframe(
-                fdf.style.applymap(
+                fdf.style.map(
                     lambda v: ("background-color:#d4edda;color:#155724" if "Pass" in str(v)
                                else "background-color:#fff3cd;color:#856404" if "caution" in str(v)
                                else ""),
