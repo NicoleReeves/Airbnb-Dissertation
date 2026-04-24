@@ -245,18 +245,31 @@ def load_processed():
 
 @st.cache_data(show_spinner="Loading listings…")
 def load_raw():
+    import re as _re
+    def _parse_price(series):
+        """Strip all non-numeric chars except decimal point, then coerce."""
+        return pd.to_numeric(
+            series.astype(str).apply(lambda x: _re.sub(r'[^\d.]', '', x)),
+            errors="coerce")
     for p in ["listings.csv","data/listings.csv","listings__2__2.csv"]:
         if os.path.exists(p):
             try:
                 df = pd.read_csv(p, low_memory=False)
-                if "price" in df.columns and df["price"].dtype == object:
-                    df["price_clean"] = pd.to_numeric(
-                        df["price"].astype(str).str.replace("£","").str.replace("$","")
-                        .str.replace(",","").str.strip(), errors="coerce")
+                # Find best price column
+                price_col = next((c for c in ["price","price_clean","nightly_price"]
+                                  if c in df.columns), None)
+                if price_col:
+                    raw = df[price_col]
+                    df["price_clean"] = (_parse_price(raw) if raw.dtype == object
+                                         else pd.to_numeric(raw, errors="coerce"))
+                    # If still all NaN, try string-parsing even if dtype looked numeric
+                    if df["price_clean"].isna().all() and price_col in df.columns:
+                        df["price_clean"] = _parse_price(df[price_col])
                 else:
-                    df["price_clean"] = pd.to_numeric(df.get("price"), errors="coerce")
+                    df["price_clean"] = float("nan")
                 return df.dropna(subset=["latitude","longitude"])
-            except Exception: pass
+            except Exception:
+                pass
     return None
 
 # ─── TEXT FEATURES ────────────────────────────────────────────────────────────
@@ -1050,7 +1063,7 @@ def main():
                 uploaded_img = st.file_uploader("", type=["jpg","jpeg","png","webp"],
                     key="img_upload", label_visibility="collapsed")
                 if uploaded_img:
-                    st.image(uploaded_img, caption="Your listing photo", use_column_width=True)
+                    st.image(uploaded_img, caption="Your listing photo", use_container_width=True)
                     st.caption("Photo quality features use dataset-median values in the model. "
                                "In a deployed version, ResNet50 would process this image directly.")
                 image_url = ""
@@ -1059,7 +1072,7 @@ def main():
                     placeholder="https://a0.muscache.com/…",
                     help="Paste your Airbnb listing photo URL for a preview.")
                 if image_url:
-                    try: st.image(image_url, use_column_width=True)
+                    try: st.image(image_url, use_container_width=True)
                     except Exception: st.caption("Could not load image.")
 
             # ── 2. Property Details ───────────────────────────────────────────
@@ -1270,6 +1283,14 @@ def main():
                                 pn = float(raw_pv) if raw_pv is not None and pd.notna(raw_pv) else None
                             except (TypeError, ValueError):
                                 pn = None
+                            # Fallback: parse raw price string directly if price_clean was NaN
+                            if pn is None and "price" in row.index:
+                                import re as _re2
+                                try:
+                                    stripped = _re2.sub(r'[^\d.]', '', str(row["price"]))
+                                    pn = float(stripped) if stripped else None
+                                except (TypeError, ValueError):
+                                    pn = None
                             ps = f"£{pn:.0f}" if pn is not None else "–"
                             nm=str(row.get("name","Listing"))[:50]
                             ar=str(row.get(nc,"")) if nc else ""
@@ -1281,13 +1302,13 @@ def main():
                                  f'<b style="color:#FF5A5F;font-size:15px;">{ps}</b> per night<br>'
                                  f'<span style="color:#888;">{ar}</span><br><br>{lnk}</div>')
                             pv_num = pn if pn is not None else -1
-                            pin = "gray" if pv_num < 0 else "green" if pv_num < 55 else "orange" if pv_num < 90 else "red" if pv_num < 130 else "darkred"
+                            pin = "gray" if pv_num < 0 else "green" if pv_num < 55 else "orange" if pv_num < 90 else "red" if pv_num < 130 else "black"
                             folium.Marker([row["latitude"],row["longitude"]],
                                 popup=folium.Popup(pop,max_width=250),tooltip=f"{nm} · {ps}",
                                 icon=folium.Icon(color=pin,icon="home",prefix="fa")).add_to(m)
                         if len(mdf)>1500: st.caption(f"Showing 1,500 of {len(mdf):,}.")
                         st_folium(m,width=None,height=580,returned_objects=[])
-                        st.caption("🟢 <£55 · 🟠 £55–90 · 🔴 £90–130 · darkred >£130 · Click any pin for details and Airbnb link")
+                        st.caption("🟢 <£55  ·  🟠 £55–90  ·  🔴 £90–130  ·  ⬛ >£130  ·  Click any pin for details and Airbnb link")
                 with mt2:
                     sb=st.selectbox("Sort by",["Price: Low → High","Price: High → Low","Name A–Z"],label_visibility="collapsed")
                     if sb=="Price: Low → High" and pc: mdf=mdf.sort_values(pc)
@@ -1299,7 +1320,7 @@ def main():
                             with st.container(border=True):
                                 pv=row.get(pc,None) if pc else None
                                 if pd.notna(pic:=row.get("picture_url",None)):
-                                    try: st.image(str(pic),use_column_width=True)
+                                    try: st.image(str(pic),use_container_width=True)
                                     except Exception: pass
                                 st.markdown(f"**{str(row.get('name','Listing'))[:45]}**")
                                 mc1,mc2=st.columns(2)
