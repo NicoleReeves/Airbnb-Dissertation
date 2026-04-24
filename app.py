@@ -1245,6 +1245,7 @@ def main():
     # ══ TAB 2, MARKET MAP ════════════════════════════════════════════════════
     with tabs[1]:
         st.subheader("Manchester Airbnb Listings Explorer")
+        st.caption("Map v5 — colour-coded pins · listing names · Airbnb links")
         src = df_raw if df_raw is not None else df_proc
         if src is None:
             st.warning("Add `listings.csv` or `airbnb_processed_data_multimodal.csv` to enable the map.")
