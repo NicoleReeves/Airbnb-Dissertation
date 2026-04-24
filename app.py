@@ -249,13 +249,11 @@ def load_raw():
         if os.path.exists(p):
             try:
                 df = pd.read_csv(p, low_memory=False)
-                if "price" in df.columns and df["price"].dtype == object:
+                if "price" in df.columns:
                     df["price_clean"] = pd.to_numeric(
                         df["price"].astype(str)
-                        .str.replace(r'[£$€,\s]','',regex=True).str.strip(),
+                        .str.replace(r'[^\d.]', '', regex=True).str.strip(),
                         errors="coerce")
-                elif "price" in df.columns:
-                    df["price_clean"] = pd.to_numeric(df["price"], errors="coerce")
                 else:
                     df["price_clean"] = float("nan")
                 return df.dropna(subset=["latitude","longitude"])
@@ -894,12 +892,18 @@ def results_section(ui, pred, X, model, feat_cols, defaults, df_proc, df_raw):
                         elif "id" in r0.index and pd.notna(r0["id"]):
                             try: comp_urls[ci] = f"https://www.airbnb.co.uk/rooms/{int(float(r0['id']))}"
                             except Exception: pass
-            rows = [{"Listing": comp_names.get(ci, f"Similar listing {ci+1}"),
-                     "Guests":int(crow.get("accommodates",0)),
-                     "Bedrooms":int(crow.get("bedrooms",0)),"Bathrooms":crow.get("bathrooms","–"),
-                     "Price (£/night)":f"£{crow['price']:.0f}",
-                     "Airbnb Link":comp_urls.get(ci,"")}
-                    for ci,(_, crow) in enumerate(comp.iterrows())]
+            seen_names = set()
+            rows = []
+            for ci,(_, crow) in enumerate(comp.iterrows()):
+                lname = comp_names.get(ci, f"Similar listing {ci+1}")
+                if lname in seen_names: continue
+                seen_names.add(lname)
+                rows.append({"Listing": lname,
+                     "Guests": int(crow.get("accommodates",0)),
+                     "Bedrooms": int(crow.get("bedrooms",0)),
+                     "Bathrooms": crow.get("bathrooms","–"),
+                     "Price (£/night)": f"£{crow['price']:.0f}",
+                     "Airbnb Link": comp_urls.get(ci,"")})
             disp = pd.DataFrame(rows)
             if any(r["Airbnb Link"] for r in rows):
                 st.dataframe(disp, column_config={"Airbnb Link":st.column_config.LinkColumn(
@@ -1327,11 +1331,25 @@ def main():
                         with gcols[i%3]:
                             with st.container(border=True):
                                 pv=row.get(pc,None) if pc else None
+                                # Parse price robustly — fallback to raw price column
+                                import re as _re3
+                                try:
+                                    pv_num = float(pv) if pv is not None and pd.notna(pv) else None
+                                except (TypeError, ValueError):
+                                    pv_num = None
+                                if pv_num is None:
+                                    for _pcol in ["price_clean","price"]:
+                                        if _pcol in row.index and _pcol != pc:
+                                            try:
+                                                _stripped = _re3.sub(r'[^\d.]','',str(row[_pcol]))
+                                                pv_num = float(_stripped) if _stripped else None
+                                                if pv_num: break
+                                            except Exception: pass
                                 if pd.notna(pic:=row.get("picture_url",None)):
                                     try: st.image(str(pic),use_container_width=True)
                                     except Exception: pass
                                 mc1,mc2=st.columns(2)
-                                mc1.metric("Price/night",f"£{pv:.0f}" if (pv and pd.notna(pv)) else "–")
+                                mc1.metric("Price/night", f"£{pv_num:.0f}" if pv_num else "–")
                                 area_val = "–"
                                 for _nc in ["neighbourhood_group_cleansed","neighbourhood_cleansed","neighbourhood_group","neighbourhood"]:
                                     if _nc in row.index and pd.notna(row[_nc]):
