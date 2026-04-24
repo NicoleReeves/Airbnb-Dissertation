@@ -1245,7 +1245,6 @@ def main():
     # ══ TAB 2, MARKET MAP ════════════════════════════════════════════════════
     with tabs[1]:
         st.subheader("Manchester Airbnb Listings Explorer")
-        st.caption("Map v5 — colour-coded pins · listing names · Airbnb links")
         src = df_raw if df_raw is not None else df_proc
         if src is None:
             st.warning("Add `listings.csv` or `airbnb_processed_data_multimodal.csv` to enable the map.")
@@ -1253,6 +1252,9 @@ def main():
             try:
                 import folium
                 from streamlit_folium import st_folium
+                # DEBUG — remove after confirming column names
+                with st.expander("🔍 Debug: available columns in listings.csv", expanded=False):
+                    st.write(list(src.columns))
                 nc  = next((c for c in ["neighbourhood_group_cleansed","neighbourhood_cleansed",
                                               "neighbourhood_group","neighbourhood"]
                             if c in src.columns), None)
@@ -1300,19 +1302,25 @@ def main():
                                 except (TypeError, ValueError):
                                     pn = None
                             ps = f"£{pn:.0f}" if pn is not None else "–"
-                            # Name
-                            _nm = row["name"] if "name" in row.index else None
-                            nm = (str(_nm).strip() if _nm is not None and pd.notna(_nm) and str(_nm).strip() else "Manchester listing")[:50]
+                            # Name — try every possible column
+                            nm = ""
+                            for _nc2 in ["name","listing_name","title","property_name"]:
+                                if _nc2 in row.index:
+                                    _v = row[_nc2]
+                                    if _v is not None and pd.notna(_v) and str(_v).strip() not in ("","nan","None"):
+                                        nm = str(_v).strip()[:50]; break
+                            if not nm:
+                                nm = f"Listing {int(float(row['id'])) if 'id' in row.index and pd.notna(row.get('id')) else ''}"
                             # Area
                             ar = ""
                             for _ac in ["neighbourhood_group_cleansed","neighbourhood_cleansed","neighbourhood_group","neighbourhood"]:
-                                if _ac in row.index and pd.notna(row[_ac]):
-                                    ar = str(row[_ac]); break
+                                if _ac in row.index and pd.notna(row[_ac]) and str(row[_ac]).strip() not in ("","nan","None"):
+                                    ar = str(row[_ac]).strip(); break
                             # URL — listing_url first, then build from id
                             url = None
-                            if "listing_url" in row.index and pd.notna(row["listing_url"]):
-                                url = str(row["listing_url"])
-                            elif "id" in row.index and pd.notna(row["id"]):
+                            if "listing_url" in row.index and pd.notna(row["listing_url"]) and str(row["listing_url"]).strip() not in ("","nan","None"):
+                                url = str(row["listing_url"]).strip()
+                            if not url and "id" in row.index and pd.notna(row.get("id")):
                                 try: url = f"https://www.airbnb.co.uk/rooms/{int(float(row['id']))}"
                                 except Exception: pass
                             lnk = (f'<a href="{url}" target="_blank" style="color:#FF5A5F;font-weight:bold;">View on Airbnb →</a>'
@@ -1350,18 +1358,22 @@ def main():
                                         area_val = str(row[_nc])[:15]
                                         break
                                 mc2.metric("Area", area_val)
-                                # Name
-                                _nm2 = row["name"] if "name" in row.index else None
-                                nm_card = (str(_nm2).strip() if _nm2 is not None and pd.notna(_nm2) and str(_nm2).strip() else "")
+                                # Name — try every possible column
+                                nm_card = ""
+                                for _nc3 in ["name","listing_name","title","property_name"]:
+                                    if _nc3 in row.index:
+                                        _v3 = row[_nc3]
+                                        if _v3 is not None and pd.notna(_v3) and str(_v3).strip() not in ("","nan","None"):
+                                            nm_card = str(_v3).strip()[:45]; break
                                 if not nm_card:
-                                    _id2 = row["id"] if "id" in row.index else ""
-                                    nm_card = f"Listing {_id2}"
-                                st.write(nm_card[:45])
+                                    try: nm_card = f"Listing {int(float(row['id']))}" if "id" in row.index and pd.notna(row.get("id")) else "Listing"
+                                    except Exception: nm_card = "Listing"
+                                st.write(nm_card)
                                 # URL
                                 card_url = None
-                                if "listing_url" in row.index and pd.notna(row["listing_url"]):
-                                    card_url = str(row["listing_url"])
-                                elif "id" in row.index and pd.notna(row["id"]):
+                                if "listing_url" in row.index and pd.notna(row.get("listing_url")) and str(row.get("listing_url","")).strip() not in ("","nan","None"):
+                                    card_url = str(row["listing_url"]).strip()
+                                if not card_url and "id" in row.index and pd.notna(row.get("id")):
                                     try: card_url = f"https://www.airbnb.co.uk/rooms/{int(float(row['id']))}"
                                     except Exception: pass
                                 if card_url: st.link_button("View on Airbnb →", card_url, use_container_width=True)
