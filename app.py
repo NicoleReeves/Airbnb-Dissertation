@@ -249,19 +249,12 @@ def load_raw():
         if os.path.exists(p):
             try:
                 df = pd.read_csv(p, low_memory=False)
-                price_col = next((c for c in ["price","price_clean","nightly_price"]
-                                  if c in df.columns), None)
-                if price_col:
-                    raw_price = df[price_col]
-                    if raw_price.dtype == object:
-                        import re as _re
-                        cleaned = raw_price.astype(str).str.replace(
-                            r'[£$€,\s\"\']', '', regex=True).str.strip()
-                        df["price_clean"] = pd.to_numeric(cleaned, errors="coerce")
-                    else:
-                        df["price_clean"] = pd.to_numeric(raw_price, errors="coerce")
+                if "price" in df.columns and df["price"].dtype == object:
+                    df["price_clean"] = pd.to_numeric(
+                        df["price"].astype(str).str.replace("£","").str.replace("$","")
+                        .str.replace(",","").str.strip(), errors="coerce")
                 else:
-                    df["price_clean"] = np.nan
+                    df["price_clean"] = pd.to_numeric(df.get("price"), errors="coerce")
                 return df.dropna(subset=["latitude","longitude"])
             except Exception: pass
     return None
@@ -739,27 +732,21 @@ def results_section(ui, pred, X, model, feat_cols, defaults, df_proc, df_raw):
         f'Model R² = 0.5015, RMSE = £84.73</div>'
         f'</div>', unsafe_allow_html=True)
 
+
     # ── Responsible use ───────────────────────────────────────────────────────
     with st.expander("⚖️ Using this tool responsibly", expanded=False):
         st.markdown(
-            """This tool is based on 6,562 Airbnb listings in Manchester from September 2025. """
-            """It's designed to give a sense of how different features relate to price, not to set your price for you.
-
-"""
-            """**A few things to keep in mind:**
-
-"""
-            """- **Treat predictions as a guide, not a rule.** The model explains about half of the variation in prices """
-            """(R² ≈ 0.50). Things like seasonality, events, and your own hosting style are not captured.
-"""
-            """- **Use it carefully when setting prices.** Tools like this can push prices up if followed too closely. """
-            """It's worth thinking about what feels fair, not just what the model suggests.
-"""
-            """- **Be aware of where it works better or worse.** The model was checked across room types, price ranges, """
-            """and areas, and didn't show clear unfair bias. That said, it's less accurate for very low and very high priced listings.
-"""
-            """- **Your judgement still matters most.** This works best alongside your own knowledge of your property, """
-            """your guests, and the local area."""
+            "This tool is based on 6,562 Airbnb listings in Manchester from September 2025. "
+            "It's designed to give a sense of how different features relate to price, not to set your price for you.\n\n"
+            "**A few things to keep in mind:**\n\n"
+            "- **Treat predictions as a guide, not a rule.** The model explains about half of the variation in prices "
+            "(R\u00b2 \u2248 0.50). Things like seasonality, events, and your own hosting style are not captured.\n"
+            "- **Use it carefully when setting prices.** Tools like this can push prices up if followed too closely. "
+            "It's worth thinking about what feels fair, not just what the model suggests.\n"
+            "- **Be aware of where it works better or worse.** The model was checked across room types, price ranges, "
+            "and areas, and didn't show clear unfair bias. That said, it's less accurate for very low and very high priced listings.\n"
+            "- **Your judgement still matters most.** This works best alongside your own knowledge of your property, "
+            "your guests, and the local area."
         )
 
     # ── Revenue estimates ─────────────────────────────────────────────────────
@@ -1254,19 +1241,17 @@ def main():
                 sel = (f1.multiselect("Filter by area",
                        sorted(src[nc].dropna().unique()), default=sorted(src[nc].dropna().unique()))
                        if nc else [])
-                # Determine whether price filtering is possible
                 prices_valid = src[pc].dropna() if pc else pd.Series(dtype=float)
                 has_prices = len(prices_valid) > 0
                 if has_prices:
-                    q01 = prices_valid.quantile(0.01)
-                    q99 = prices_valid.quantile(0.99)
+                    q01, q99 = prices_valid.quantile(0.01), prices_valid.quantile(0.99)
                     mn = int(q01) if pd.notna(q01) else 0
                     mx = int(q99) if pd.notna(q99) else 500
                     if mn >= mx: mn, mx = 0, 500
                     pr = f2.slider("Price (£/night)", mn, mx, (mn, mx), step=5)
                 else:
                     pr = (0, 9999)
-                    if pc: f2.caption("Price filter unavailable (price data not readable in this file)")
+                    if pc: f2.caption("Price filter unavailable")
                 mdf = src.copy()
                 if nc and sel: mdf = mdf[mdf[nc].isin(sel)]
                 if pc and has_prices:
@@ -1280,8 +1265,12 @@ def main():
                         m=folium.Map([mdf["latitude"].mean(),mdf["longitude"].mean()],zoom_start=11,tiles="CartoDB positron")
                         smp=mdf.sample(min(1500,len(mdf)),random_state=42) if len(mdf)>1500 else mdf
                         for _,row in smp.iterrows():
-                            pv=row.get(pc,None) if pc else None
-                            ps=f"£{pv:.0f}" if isinstance(pv,(int,float)) and pd.notna(pv) else "–"
+                            raw_pv = row[pc] if pc and pc in row.index else None
+                            try:
+                                pn = float(raw_pv) if raw_pv is not None and pd.notna(raw_pv) else None
+                            except (TypeError, ValueError):
+                                pn = None
+                            ps = f"£{pn:.0f}" if pn is not None else "–"
                             nm=str(row.get("name","Listing"))[:50]
                             ar=str(row.get(nc,"")) if nc else ""
                             url=row.get("listing_url",None)
@@ -1291,8 +1280,8 @@ def main():
                                  f'<b>{nm}</b><br><br>'
                                  f'<b style="color:#FF5A5F;font-size:15px;">{ps}</b> per night<br>'
                                  f'<span style="color:#888;">{ar}</span><br><br>{lnk}</div>')
-                            pn=pv if isinstance(pv,(int,float)) and pd.notna(pv) else 0
-                            pin="green" if pn<55 else "orange" if pn<90 else "red" if pn<130 else "darkred"
+                            pv_num = pn if pn is not None else -1
+                            pin = "gray" if pv_num < 0 else "green" if pv_num < 55 else "orange" if pv_num < 90 else "red" if pv_num < 130 else "darkred"
                             folium.Marker([row["latitude"],row["longitude"]],
                                 popup=folium.Popup(pop,max_width=250),tooltip=f"{nm} · {ps}",
                                 icon=folium.Icon(color=pin,icon="home",prefix="fa")).add_to(m)
@@ -1437,13 +1426,19 @@ def main():
                 if "accommodates" in df_proc.columns:
                     st.markdown('<div class="sec-hdr">More Guests = Higher Price?</div>',
                                 unsafe_allow_html=True)
-                    cap_df = df_proc[df_proc["price"]<400].groupby("accommodates")["price"].median().reset_index()
+                    cap_df = (df_proc[df_proc["price"]<400]
+                              .assign(accommodates=lambda d: d["accommodates"].round().astype(int))
+                              .groupby("accommodates")["price"].median().reset_index())
                     cap_df.columns = ["Max Guests","Median Price"]
+                    cap_df["Max Guests"] = cap_df["Max Guests"].astype(str)
                     fig4 = px.bar(cap_df, x="Max Guests", y="Median Price",
                         labels={"Max Guests":"Maximum guests","Median Price":"Median price (£/night)"},
-                        color_discrete_sequence=["#FF5A5F"])
+                        text=cap_df["Median Price"].apply(lambda x: f"£{x:.0f}"),
+                        color_discrete_sequence=["#FF5A5F"],
+                        category_orders={"Max Guests": [str(i) for i in sorted(cap_df["Max Guests"].astype(int).tolist())]})
+                    fig4.update_traces(textposition="outside")
                     fig4.update_layout(plot_bgcolor="white", paper_bgcolor="white",
-                                       margin=dict(t=20,b=40,l=40,r=20))
+                                       margin=dict(t=30,b=40,l=40,r=20))
                     st.plotly_chart(fig4, use_container_width=True)
                     st.caption("Generally, price rises with capacity, but not always linearly. "
                                "The model captures this relationship through the `accommodates` feature "
@@ -1478,18 +1473,21 @@ def main():
                     st.markdown('<div class="sec-hdr">How Does the Number of Bedrooms Affect Price?</div>',
                                 unsafe_allow_html=True)
                     bed_df = (df_proc[df_proc["price"] < 500]
+                              .assign(bedrooms=lambda d: d["bedrooms"].round().astype("Int64"))
                               .groupby("bedrooms")["price"]
                               .agg(["median","count"])
                               .reset_index())
                     bed_df.columns = ["Bedrooms","Median Price","Listings"]
-                    bed_df = bed_df[bed_df["Listings"] >= 20]  # only show meaningful groups
+                    bed_df = bed_df[bed_df["Listings"] >= 20]
+                    bed_df["Bedrooms"] = bed_df["Bedrooms"].astype(str)
                     fig6 = px.bar(bed_df, x="Bedrooms", y="Median Price",
                         labels={"Median Price":"Median price (£/night)", "Bedrooms":"Number of bedrooms"},
                         text=bed_df["Median Price"].apply(lambda x: f"£{x:.0f}"),
-                        color_discrete_sequence=["#FF5A5F"])
+                        color_discrete_sequence=["#FF5A5F"],
+                        category_orders={"Bedrooms": [str(i) for i in sorted(bed_df["Bedrooms"].astype(int).tolist())]})
                     fig6.update_traces(textposition="outside")
                     fig6.update_layout(plot_bgcolor="white", paper_bgcolor="white",
-                        margin=dict(t=20,b=40,l=40,r=20))
+                        margin=dict(t=30,b=40,l=40,r=20))
                     st.plotly_chart(fig6, use_container_width=True)
                     st.caption(
                         "Each additional bedroom tends to add around £20–40 to the nightly price, "
