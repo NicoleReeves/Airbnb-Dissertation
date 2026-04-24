@@ -245,26 +245,17 @@ def load_processed():
 
 @st.cache_data(show_spinner="Loading listings…")
 def load_raw():
-    import re as _re
-    def _parse_price(series):
-        """Strip all non-numeric chars except decimal point, then coerce."""
-        return pd.to_numeric(
-            series.astype(str).apply(lambda x: _re.sub(r'[^\d.]', '', x)),
-            errors="coerce")
     for p in ["listings.csv","data/listings.csv","listings__2__2.csv"]:
         if os.path.exists(p):
             try:
                 df = pd.read_csv(p, low_memory=False)
-                # Find best price column
-                price_col = next((c for c in ["price","price_clean","nightly_price"]
-                                  if c in df.columns), None)
-                if price_col:
-                    raw = df[price_col]
-                    df["price_clean"] = (_parse_price(raw) if raw.dtype == object
-                                         else pd.to_numeric(raw, errors="coerce"))
-                    # If still all NaN, try string-parsing even if dtype looked numeric
-                    if df["price_clean"].isna().all() and price_col in df.columns:
-                        df["price_clean"] = _parse_price(df[price_col])
+                if "price" in df.columns and df["price"].dtype == object:
+                    df["price_clean"] = pd.to_numeric(
+                        df["price"].astype(str)
+                        .str.replace(r'[£$€,\s]','',regex=True).str.strip(),
+                        errors="coerce")
+                elif "price" in df.columns:
+                    df["price_clean"] = pd.to_numeric(df["price"], errors="coerce")
                 else:
                     df["price_clean"] = float("nan")
                 return df.dropna(subset=["latitude","longitude"])
@@ -1252,9 +1243,6 @@ def main():
             try:
                 import folium
                 from streamlit_folium import st_folium
-                # DEBUG — remove after confirming column names
-                with st.expander("🔍 Debug: available columns in listings.csv", expanded=False):
-                    st.write(list(src.columns))
                 nc  = next((c for c in ["neighbourhood_group_cleansed","neighbourhood_cleansed",
                                               "neighbourhood_group","neighbourhood"]
                             if c in src.columns), None)
@@ -1302,15 +1290,7 @@ def main():
                                 except (TypeError, ValueError):
                                     pn = None
                             ps = f"£{pn:.0f}" if pn is not None else "–"
-                            # Name — try every possible column
-                            nm = ""
-                            for _nc2 in ["name","listing_name","title","property_name"]:
-                                if _nc2 in row.index:
-                                    _v = row[_nc2]
-                                    if _v is not None and pd.notna(_v) and str(_v).strip() not in ("","nan","None"):
-                                        nm = str(_v).strip()[:50]; break
-                            if not nm:
-                                nm = f"Listing {int(float(row['id'])) if 'id' in row.index and pd.notna(row.get('id')) else ''}"
+                            nm = str(row.get("name","")).strip()[:50] or "Listing"
                             # Area
                             ar = ""
                             for _ac in ["neighbourhood_group_cleansed","neighbourhood_cleansed","neighbourhood_group","neighbourhood"]:
