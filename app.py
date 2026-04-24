@@ -884,19 +884,26 @@ def results_section(ui, pred, X, model, feat_cols, defaults, df_proc, df_raw):
             cidx    = idxs[0][1:]
             comp    = dknn.iloc[cidx].copy()
             comp_urls = {}
-            if df_raw is not None and "listing_url" in df_raw.columns:
-                for ci, (_, crow) in enumerate(comp.iterrows()):
-                    mr = df_raw[(df_raw["latitude"].round(4)==round(crow.get("latitude",0),4))&
-                                (df_raw["longitude"].round(4)==round(crow.get("longitude",0),4))]
-                    if len(mr)>0: comp_urls[ci]=mr.iloc[0]["listing_url"]
-            # Look up listing name from raw data via lat/lon match
             comp_names = {}
-            if df_raw is not None and "name" in df_raw.columns:
+            if df_raw is not None:
+                # Build id→row lookup for fast matching
+                id_col = "id" if "id" in df_raw.columns else None
                 for ci, (_, crow) in enumerate(comp.iterrows()):
-                    mr = df_raw[(df_raw["latitude"].round(4)==round(crow.get("latitude",0),4))&
-                                (df_raw["longitude"].round(4)==round(crow.get("longitude",0),4))]
-                    if len(mr)>0:
-                        comp_names[ci] = str(mr.iloc[0]["name"])[:50]
+                    mr = df_raw[
+                        (df_raw["latitude"].round(3) == round(float(crow.get("latitude", 0)), 3)) &
+                        (df_raw["longitude"].round(3) == round(float(crow.get("longitude", 0)), 3))
+                    ]
+                    if len(mr) > 0:
+                        r0 = mr.iloc[0]
+                        # Name
+                        if "name" in r0.index and pd.notna(r0["name"]):
+                            comp_names[ci] = str(r0["name"])[:50]
+                        # URL — prefer listing_url, fall back to building from id
+                        if "listing_url" in r0.index and pd.notna(r0["listing_url"]):
+                            comp_urls[ci] = str(r0["listing_url"])
+                        elif id_col and pd.notna(r0[id_col]):
+                            try: comp_urls[ci] = f"https://www.airbnb.co.uk/rooms/{int(r0[id_col])}"
+                            except Exception: pass
             rows = [{"Listing": comp_names.get(ci, f"Similar listing {ci+1}"),
                      "Guests":int(crow.get("accommodates",0)),
                      "Bedrooms":int(crow.get("bedrooms",0)),"Bathrooms":crow.get("bathrooms","–"),
@@ -1246,7 +1253,8 @@ def main():
             try:
                 import folium
                 from streamlit_folium import st_folium
-                nc  = next((c for c in ["neighbourhood_group_cleansed","neighbourhood_cleansed"]
+                nc  = next((c for c in ["neighbourhood_group_cleansed","neighbourhood_cleansed",
+                                              "neighbourhood_group","neighbourhood"]
                             if c in src.columns), None)
                 pc  = "price_clean" if "price_clean" in src.columns else (
                       "price" if "price" in src.columns else None)
@@ -1294,9 +1302,12 @@ def main():
                             ps = f"£{pn:.0f}" if pn is not None else "–"
                             nm=str(row.get("name","Listing"))[:50]
                             ar=str(row.get(nc,"")) if nc else ""
-                            url=row.get("listing_url",None)
-                            lnk=(f'<a href="{url}" target="_blank" style="color:#FF5A5F;font-weight:bold;">View on Airbnb →</a>'
-                                 if url and pd.notna(url) else "")
+                            url = row.get("listing_url", None)
+                            if (url is None or pd.isna(url)) and "id" in row.index:
+                                try: url = f"https://www.airbnb.co.uk/rooms/{int(row['id'])}"
+                                except Exception: url = None
+                            lnk = (f'<a href="{url}" target="_blank" style="color:#FF5A5F;font-weight:bold;">View on Airbnb →</a>'
+                                   if url and url != "None" else "")
                             pop=(f'<div style="width:220px;font-family:Arial;padding:8px;">'
                                  f'<b>{nm}</b><br><br>'
                                  f'<b style="color:#FF5A5F;font-size:15px;">{ps}</b> per night<br>'
@@ -1322,12 +1333,21 @@ def main():
                                 if pd.notna(pic:=row.get("picture_url",None)):
                                     try: st.image(str(pic),use_container_width=True)
                                     except Exception: pass
-                                st.markdown(f"**{str(row.get('name','Listing'))[:45]}**")
                                 mc1,mc2=st.columns(2)
                                 mc1.metric("Price/night",f"£{pv:.0f}" if (pv and pd.notna(pv)) else "–")
-                                mc2.metric("Area",str(row.get(nc,"–"))[:15] if nc else "–")
-                                url=row.get("listing_url",None)
-                                if url and pd.notna(url): st.link_button("View on Airbnb →",str(url),use_container_width=True)
+                                area_val = "–"
+                                for _nc in ["neighbourhood_group_cleansed","neighbourhood_cleansed","neighbourhood_group","neighbourhood"]:
+                                    if _nc in row.index and pd.notna(row[_nc]):
+                                        area_val = str(row[_nc])[:15]
+                                        break
+                                mc2.metric("Area", area_val)
+                                url = row.get("listing_url", None)
+                                if (url is None or pd.isna(url)) and "id" in row.index:
+                                    try: url = f"https://www.airbnb.co.uk/rooms/{int(row['id'])}"
+                                    except Exception: url = None
+                                nm_card = str(row.get("name", "") or "").strip() or f"Listing {row.get('id','')}"
+                                st.markdown(f"**{nm_card[:45]}**")
+                                if url and str(url) != "None": st.link_button("View on Airbnb →", str(url), use_container_width=True)
                     if len(mdf)>60: st.caption(f"Showing top 60 of {len(mdf):,}.")
             except ImportError:
                 st.error("Map requires: `pip install folium streamlit-folium`")
